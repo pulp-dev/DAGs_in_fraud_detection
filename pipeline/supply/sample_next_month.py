@@ -1,4 +1,4 @@
-"""Случайная выборка 100 тысяч строк и перенос их в следующий месяц."""
+"""Случайная выборка SAMPLE_SIZE строк и перенос их в следующий месяц."""
 
 import calendar
 import logging
@@ -42,10 +42,12 @@ def shift_into_month(frame: pd.DataFrame, month_start: pd.Timestamp) -> pd.DataF
 def sample_next_month() -> dict:
     """Сэмплирует строки витрины и готовит батч следующего календарного месяца.
 
-    Из labeled_transactions случайно берётся до SAMPLE_SIZE наблюдений.
-    Месяц батча — следующий после max(transaction_time). Времена переносятся
+    Из labeled_transactions случайно берется до SAMPLE_SIZE наблюдений.
+    Месяц батча - следующий после max(transaction_time). Времена переносятся
     в этот месяц, результат пишется в supply_batch.parquet.
-    Витрину не изменяет. Возвращает путь к файлу и первое число месяца батча.
+    Витрину не изменяет, а файл перезаписывается целиком, поэтому повтор
+    задачи только пересэмплирует батч того же месяца.
+    Возвращает путь к файлу и первое число месяца батча.
     """
     TRAINING_DIR.mkdir(parents=True, exist_ok=True)
     conn = get_conn()
@@ -75,7 +77,7 @@ def sample_next_month() -> dict:
     batch = shift_into_month(frame, month_start)
     batch.to_parquet(SUPPLY_BATCH, index=False)
     logger.info(
-        "Батч %s: %s строк из %s, время %s — %s",
+        "Батч %s: %s строк из %s, время %s - %s",
         month_start.strftime("%Y-%m"),
         len(batch),
         row_count,

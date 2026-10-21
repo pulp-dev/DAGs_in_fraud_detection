@@ -8,7 +8,6 @@ from confluent_kafka import Consumer
 from confluent_kafka import Producer
 
 sys.path.append(os.path.abspath('./src'))  # noqa: PTH100
-from preprocessing import run_preproc
 from scorer import ensure_bootstrap, make_pred
 
 
@@ -51,9 +50,8 @@ class ProcessingService:
             transaction_id = data['transaction_id']
             input_df = pd.DataFrame([data['data']])
 
-            # Препроцессинг и предсказание
-            processed_df = run_preproc(input_df)
-            submission, _, model_version = make_pred(processed_df, "kafka_stream")
+            # Препроцессинг со статистиками текущей версии и предсказание
+            submission, _, model_version = make_pred(input_df, "kafka_stream")
 
             # Добавляем ID и версию модели, которая отскорила запрос
             submission['transaction_id'] = transaction_id

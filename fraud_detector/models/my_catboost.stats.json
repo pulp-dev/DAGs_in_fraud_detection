@@ -1,0 +1,19 @@
+{
+  "amount_median_global": 47.98,
+  "amount_median_by_cat": {
+    "entertainment": 52.5,
+    "food_dining": 42.9,
+    "gas_transport": 63.47,
+    "grocery_net": 51.55,
+    "grocery_pos": 105.985,
+    "health_fitness": 44.39,
+    "home": 48.69,
+    "kids_pets": 47.685,
+    "misc_net": 9.73,
+    "misc_pos": 12.54,
+    "personal_care": 32.175,
+    "shopping_net": 8.665,
+    "shopping_pos": 7.6850000000000005,
+    "travel": 6.165
+  }
+}

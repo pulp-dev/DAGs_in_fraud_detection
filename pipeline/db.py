@@ -9,6 +9,8 @@ import pandas as pd
 import psycopg2
 from dateutil.relativedelta import relativedelta
 
+from pipeline.settings import WINDOW_MONTHS
+
 logger = logging.getLogger(__name__)
 
 LABELED_COLUMNS = [
@@ -36,7 +38,7 @@ LABELED_COLUMNS = [
 def get_conn():
     """Открывает соединение с базой, где лежит витрина labeled_transactions.
 
-    Хост, порт, имя базы и учётные данные читаются из переменных окружения
+    Хост, порт, имя базы и учетные данные читаются из переменных окружения
     POSTGRES_HOST, POSTGRES_PORT, POSTGRES_DB, POSTGRES_USER, POSTGRES_PASSWORD.
     """
     return psycopg2.connect(
@@ -57,9 +59,9 @@ def month_end_exclusive(month_start: date) -> date:
 
 
 def read_training_state(conn) -> dict:
-    """Читает границы трёхмесячного окна и месяц следующего батча обучения.
+    """Читает границы трехмесячного окна и месяц следующего батча обучения.
 
-    Ожидает строку id = 1 в training_state, которую создаёт data_loader.
+    Ожидает строку id = 1 в training_state, которую создает data_loader.
     Возвращает словарь с ключами window_start, window_end и next_batch_month.
     """
     with conn.cursor() as cur:
@@ -80,16 +82,36 @@ def read_training_state(conn) -> dict:
     }
 
 
+def window_start_for(batch_month: date) -> date:
+    """Возвращает первый месяц окна из WINDOW_MONTHS месяцев, которое заканчивается batch_month."""
+    return batch_month - relativedelta(months=WINDOW_MONTHS - 1)
+
+
+def read_labeled_range(conn, start: date, end_exclusive: date) -> pd.DataFrame:
+    """Читает строки labeled_transactions с transaction_time в [start, end_exclusive)."""
+    columns = ", ".join(LABELED_COLUMNS)
+    return pd.read_sql(
+        f"""
+        SELECT {columns}
+        FROM labeled_transactions
+        WHERE transaction_time >= %s AND transaction_time < %s
+        ORDER BY transaction_time
+        """,
+        conn,
+        params=(start, end_exclusive),
+    )
+
+
 def advance_training_state(conn, batch_month: date) -> None:
     """Сдвигает окно обучения на месяц успешно опубликованного батча.
 
-    Новое окно заканчивается batch_month и покрывает три месяца.
+    Новое окно заканчивается batch_month и покрывает WINDOW_MONTHS месяцев.
     next_batch_month становится следующим календарным месяцем.
-    Вызывать только после записи модели, чтобы повтор упавшего прогона
-    не пропускал месяц.
+    Значения вычисляются только из batch_month, поэтому повторный вызов
+    с тем же месяцем ничего не меняет.
     """
     window_end = batch_month
-    window_start = batch_month - relativedelta(months=2)
+    window_start = window_start_for(batch_month)
     next_batch = month_end_exclusive(batch_month)
     with conn.cursor() as cur:
         cur.execute(
@@ -105,18 +127,19 @@ def advance_training_state(conn, batch_month: date) -> None:
         )
     conn.commit()
     logger.info(
-        "Состояние обновлено: окно %s — %s, следующий батч %s",
+        "Состояние обновлено: окно %s - %s, следующий батч %s",
         window_start,
         window_end,
         next_batch,
     )
 
 
-def copy_labeled_frame(conn, frame: pd.DataFrame) -> None:
-    """Дописывает строки в конец labeled_transactions через COPY.
+def replace_labeled_month(conn, frame: pd.DataFrame, month_start: date) -> None:
+    """Записывает frame в labeled_transactions как содержимое месяца month_start.
 
-    frame должен содержать колонки LABELED_COLUMNS. transaction_time
-    записывается как timestamp. Транзакция фиксируется в конце загрузки.
+    Сначала удаляет строки этого месяца, затем загружает frame через COPY.
+    Оба шага идут в одной транзакции, поэтому повтор после сбоя
+    не создает дублей и не оставляет месяц наполовину записанным.
     """
     payload = frame.loc[:, LABELED_COLUMNS].copy()
     payload["transaction_time"] = pd.to_datetime(payload["transaction_time"])
@@ -130,9 +153,19 @@ def copy_labeled_frame(conn, frame: pd.DataFrame) -> None:
     buffer.seek(0)
     column_list = ", ".join(LABELED_COLUMNS)
     with conn.cursor() as cur:
+        cur.execute(
+            "DELETE FROM labeled_transactions WHERE transaction_time >= %s AND transaction_time < %s",
+            (month_start, month_end_exclusive(month_start)),
+        )
+        deleted = cur.rowcount
         cur.copy_expert(
             f"COPY labeled_transactions ({column_list}) FROM STDIN WITH (FORMAT CSV)",
             buffer,
         )
     conn.commit()
-    logger.info("В labeled_transactions дописано %s строк.", len(payload))
+    logger.info(
+        "Месяц %s в labeled_transactions: удалено %s строк, записано %s.",
+        month_start,
+        deleted,
+        len(payload),
+    )
